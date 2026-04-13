@@ -25,6 +25,8 @@
   "manifest": {
     "name": "Tab Tidy Side Panel",
     "permissions": [
+      "favicon",
+      "sessions",
       "tabs",
       "tabGroups",
       "storage"
