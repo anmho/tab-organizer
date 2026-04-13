@@ -379,7 +379,13 @@ function SidePanel() {
   const [flash, setFlash] = useState("")
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [cursorTabId, setCursorTabId] = useState<number | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; count: number; label: string }>({
+    open: false,
+    count: 0,
+    label: "tabs"
+  })
   const undoStackRef = useRef<number[]>([])
+  const confirmResolverRef = useRef<((approved: boolean) => void) | null>(null)
 
   const savePrefs = async (next: Prefs) => {
     setPrefs(next)
@@ -577,8 +583,53 @@ function SidePanel() {
     setTimeout(() => setFlash(""), 3000)
   }
 
-  const confirmClose = (count: number, label: string) => {
-    return window.confirm(`Close ${count} ${label}?\n\nYou can undo with Ctrl/Cmd+Z.`)
+  const resolveCloseConfirmation = useCallback((approved: boolean) => {
+    setConfirmDialog((prev) => ({ ...prev, open: false }))
+    const resolve = confirmResolverRef.current
+    confirmResolverRef.current = null
+    if (resolve) resolve(approved)
+  }, [])
+
+  const requestCloseConfirmation = useCallback((count: number, label: string) => {
+    if (confirmResolverRef.current) {
+      confirmResolverRef.current(false)
+      confirmResolverRef.current = null
+    }
+    setConfirmDialog({ open: true, count, label })
+    return new Promise<boolean>((resolve) => {
+      confirmResolverRef.current = resolve
+    })
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (confirmResolverRef.current) {
+        confirmResolverRef.current(false)
+        confirmResolverRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!confirmDialog.open) return
+    const onDialogKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        resolveCloseConfirmation(false)
+        return
+      }
+      if (event.key === "Enter") {
+        event.preventDefault()
+        resolveCloseConfirmation(true)
+      }
+    }
+    window.addEventListener("keydown", onDialogKeyDown)
+    return () => window.removeEventListener("keydown", onDialogKeyDown)
+  }, [confirmDialog.open, resolveCloseConfirmation])
+
+  const formatCloseLabel = (count: number, label: string) => {
+    if (count === 1 && label.endsWith("s")) return label.slice(0, -1)
+    return label
   }
 
   const toggleSelected = (id: number) => {
@@ -612,7 +663,10 @@ function SidePanel() {
   const closeAll = async (tabList: chrome.tabs.Tab[], label: string, requireConfirm = false) => {
     const ids = tabList.map((t) => t.id).filter((id): id is number => id != null)
     if (!ids.length) return
-    if (requireConfirm && !confirmClose(ids.length, label)) return
+    if (requireConfirm) {
+      const approved = await requestCloseConfirmation(ids.length, label)
+      if (!approved) return
+    }
     await chrome.tabs.remove(ids)
     pushUndo(ids.length)
     setSelectedIds((prev) => {
@@ -635,8 +689,9 @@ function SidePanel() {
 
   const closeFocusedWithConfirm = async () => {
     if (cursorTabId == null) return
-    if (!confirmClose(1, "tab")) return
-    await closeTab(cursorTabId)
+    const focusedTab = tabs.find((tab) => tab.id === cursorTabId)
+    if (!focusedTab) return
+    await closeAll([focusedTab], "tab", true)
   }
 
   const undoClose = async () => {
@@ -681,6 +736,8 @@ function SidePanel() {
         return
       }
 
+      if (confirmDialog.open) return
+
       if (!wasteTabIds.length) return
 
       const currentIndex = cursorTabId != null ? wasteTabIds.indexOf(cursorTabId) : -1
@@ -715,7 +772,7 @@ function SidePanel() {
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [wasteTabIds, cursorTabId, selectedCount, closeSelected, closeFocusedWithConfirm])
+  }, [confirmDialog.open, wasteTabIds, cursorTabId, selectedCount, closeSelected, closeFocusedWithConfirm])
 
   const rowInteractionProps = (tab: chrome.tabs.Tab) => {
     const id = tab.id ?? -1
@@ -737,7 +794,7 @@ function SidePanel() {
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-screen bg-white text-slate-800 overflow-hidden">
+    <div className="relative flex flex-col h-screen bg-white text-slate-800 overflow-hidden">
 
       {/* header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-100 shrink-0">
@@ -887,6 +944,38 @@ function SidePanel() {
           </>
         )}
       </div>
+
+      {confirmDialog.open && (
+        <div className="absolute inset-0 z-30 bg-slate-900/35 flex items-center justify-center p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-close-title"
+            className="w-full max-w-xs rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
+            <h2 id="confirm-close-title" className="text-[13px] font-semibold text-slate-800">
+              Confirm close
+            </h2>
+            <p className="mt-2 text-[12px] text-slate-600">
+              Close {confirmDialog.count} {formatCloseLabel(confirmDialog.count, confirmDialog.label)}?
+            </p>
+            <p className="mt-1 text-[11px] text-slate-400">
+              You can undo with Ctrl/Cmd+Z.
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                onClick={() => resolveCloseConfirmation(false)}
+                className="px-2.5 py-1.5 text-[11px] font-medium text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-md cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300">
+                Cancel
+              </button>
+              <button
+                onClick={() => resolveCloseConfirmation(true)}
+                className="px-2.5 py-1.5 text-[11px] font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-100 rounded-md cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {flash && (
         <div className="shrink-0 px-3 py-1.5 text-[11px] text-slate-400 border-t border-slate-100 bg-slate-50">

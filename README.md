@@ -23,6 +23,15 @@ Then in Chrome:
 2. Enable Developer mode
 3. Load unpacked extension from `tab-organizer-plasmo/build/chrome-mv3-dev`
 
+## Hotkey
+
+Default shortcut to open Tab Tidy:
+
+- Windows/Linux: `Ctrl+Shift+Y`
+- macOS: `Command+Shift+Y`
+
+You can change it in `chrome://extensions/shortcuts`.
+
 For production build:
 
 ```bash
